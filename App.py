@@ -18,10 +18,11 @@ if "embeddings_db" not in st.session_state:
     st.session_state.embeddings_db = None
 if "processing_complete" not in st.session_state:
     st.session_state.processing_complete = False
+if "uploaded_file_content" not in st.session_state:
+    st.session_state.uploaded_file_content = None
 
 # Document processing functions
 def chunk_text(text: str, chunk_size: int = 1000, overlap: int = 100) -> List[str]:
-    """Split text into overlapping chunks of specified size."""
     chunks = []
     start = 0
     text_length = len(text)
@@ -46,9 +47,9 @@ def chunk_text(text: str, chunk_size: int = 1000, overlap: int = 100) -> List[st
     return chunks
 
 def read_pdf(file) -> str:
-    """Extract text from PDF file."""
     try:
-        pdf_reader = PyPDF2.PdfReader(io.BytesIO(file.read()))
+        file_bytes = file.getvalue()  # Get bytes directly
+        pdf_reader = PyPDF2.PdfReader(io.BytesIO(file_bytes))
         text = ""
         for page in pdf_reader.pages:
             text += page.extract_text() + "\n"
@@ -58,15 +59,13 @@ def read_pdf(file) -> str:
         return ""
 
 def read_txt(file) -> str:
-    """Read text from TXT file."""
     try:
-        return file.read().decode('utf-8')
+        return file.getvalue().decode('utf-8')
     except Exception as e:
         st.error(f"Error reading TXT file: {str(e)}")
         return ""
 
 def get_embedding(text: str, client) -> List[float]:
-    """Get embedding for text using OpenAI API."""
     try:
         response = client.embeddings.create(
             model="text-embedding-3-small",
@@ -77,23 +76,12 @@ def get_embedding(text: str, client) -> List[float]:
         st.error(f"Error getting embedding: {str(e)}")
         return None
 
-def process_document(file, progress_bar, client) -> pd.DataFrame:
-    """Process document and create embeddings with progress tracking."""
-    if not file:
-        return None
-    
-    # Read file content based on type
-    file_type = file.type
-    if file_type == "application/pdf":
-        text = read_pdf(file)
-    elif file_type == "text/plain":
-        text = read_txt(file)
-    else:
-        st.error("Unsupported file type")
+def process_document(file_content: str, progress_bar, client) -> pd.DataFrame:
+    if not file_content:
         return None
     
     # Chunk the text
-    chunks = chunk_text(text)
+    chunks = chunk_text(file_content)
     total_chunks = len(chunks)
     
     if not chunks:
@@ -115,36 +103,13 @@ def process_document(file, progress_bar, client) -> pd.DataFrame:
             st.error(f"Error processing chunk {i+1}: {str(e)}")
             continue
     
+    if not embeddings:
+        return None
+        
     return pd.DataFrame({
         'text': texts,
         'embedding': embeddings
     })
-
-def get_context(query: str, df: pd.DataFrame, client, top_n: int = 3) -> str:
-    """Get relevant context using semantic search."""
-    try:
-        query_embedding = get_embedding(query, client)
-        if not query_embedding:
-            return ""
-        
-        # Calculate similarities using vectorized operations
-        similarities = df.embedding.apply(lambda x: np.dot(x, query_embedding))
-        
-        # Get top similar contexts
-        top_contexts = df.assign(similarity=similarities)\
-                        .nlargest(top_n, 'similarity')\
-                        .apply(lambda x: f"{x['text']}", axis=1)\
-                        .tolist()
-        
-        return " ".join(top_contexts)
-    except Exception as e:
-        st.error(f"Error retrieving context: {str(e)}")
-        return ""
-
-def count_tokens(text: str) -> int:
-    """Count tokens in text using tiktoken."""
-    encoding = tiktoken.get_encoding("cl100k_base")
-    return len(encoding.encode(text))
 
 # Sidebar
 with st.sidebar:
@@ -154,19 +119,33 @@ with st.sidebar:
     st.markdown("### Knowledge Base Settings")
     uploaded_file = st.file_uploader("Upload Knowledge Base (PDF, TXT)", type=["pdf", "txt"])
     
-    if uploaded_file and api_key:
+    # Store file content when file is uploaded
+    if uploaded_file is not None:
+        if uploaded_file.type == "application/pdf":
+            st.session_state.uploaded_file_content = read_pdf(uploaded_file)
+        elif uploaded_file.type == "text/plain":
+            st.session_state.uploaded_file_content = read_txt(uploaded_file)
+    
+    if st.session_state.uploaded_file_content and api_key:
         st.markdown("### Processing Settings")
         chunk_size = st.slider("Chunk Size (characters)", 500, 2000, 1000)
         chunk_overlap = st.slider("Chunk Overlap (characters)", 50, 200, 100)
         
         if st.button("Process Document"):
-            client = openai.OpenAI(api_key=api_key)
-            progress_bar = st.progress(0)
-            st.session_state.embeddings_db = process_document(uploaded_file, progress_bar, client)
-            if st.session_state.embeddings_db is not None:
-                st.session_state.processing_complete = True
-                st.success("Document processed successfully!")
-            progress_bar.empty()
+            try:
+                client = openai.OpenAI(api_key=api_key)
+                progress_bar = st.progress(0)
+                st.session_state.embeddings_db = process_document(
+                    st.session_state.uploaded_file_content,
+                    progress_bar,
+                    client
+                )
+                if st.session_state.embeddings_db is not None:
+                    st.session_state.processing_complete = True
+                    st.success("Document processed successfully!")
+                progress_bar.empty()
+            except Exception as e:
+                st.error(f"Error during document processing: {str(e)}")
 
 # Main chat interface
 st.title("ClaudinAI")
