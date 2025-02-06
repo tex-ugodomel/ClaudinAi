@@ -1,6 +1,5 @@
 import streamlit as st
 import openai
-from openai.embeddings_utils import get_embedding
 import numpy as np
 import pandas as pd
 import PyPDF2
@@ -31,7 +30,6 @@ def chunk_text(text: str, chunk_size: int = 1000, overlap: int = 100) -> List[st
         end = start + chunk_size
         if end > text_length:
             end = text_length
-        # Find the last period or newline in the chunk to avoid cutting sentences
         if end < text_length:
             last_period = max(
                 text.rfind('.', start, end),
@@ -67,7 +65,19 @@ def read_txt(file) -> str:
         st.error(f"Error reading TXT file: {str(e)}")
         return ""
 
-def process_document(file, progress_bar) -> pd.DataFrame:
+def get_embedding(text: str, client) -> List[float]:
+    """Get embedding for text using OpenAI API."""
+    try:
+        response = client.embeddings.create(
+            model="text-embedding-3-small",
+            input=text
+        )
+        return response.data[0].embedding
+    except Exception as e:
+        st.error(f"Error getting embedding: {str(e)}")
+        return None
+
+def process_document(file, progress_bar, client) -> pd.DataFrame:
     """Process document and create embeddings with progress tracking."""
     if not file:
         return None
@@ -96,9 +106,10 @@ def process_document(file, progress_bar) -> pd.DataFrame:
     
     for i, chunk in enumerate(chunks):
         try:
-            embedding = get_embedding(chunk, engine="text-embedding-3-small")
-            embeddings.append(embedding)
-            texts.append(chunk)
+            embedding = get_embedding(chunk, client)
+            if embedding:
+                embeddings.append(embedding)
+                texts.append(chunk)
             progress_bar.progress((i + 1) / total_chunks)
         except Exception as e:
             st.error(f"Error processing chunk {i+1}: {str(e)}")
@@ -109,15 +120,17 @@ def process_document(file, progress_bar) -> pd.DataFrame:
         'embedding': embeddings
     })
 
-def get_context(query: str, df: pd.DataFrame, top_n: int = 3) -> str:
+def get_context(query: str, df: pd.DataFrame, client, top_n: int = 3) -> str:
     """Get relevant context using semantic search."""
     try:
-        query_embedding = get_embedding(query, engine="text-embedding-3-small")
+        query_embedding = get_embedding(query, client)
+        if not query_embedding:
+            return ""
         
         # Calculate similarities using vectorized operations
         similarities = df.embedding.apply(lambda x: np.dot(x, query_embedding))
         
-        # Get top similar contexts with their similarity scores
+        # Get top similar contexts
         top_contexts = df.assign(similarity=similarities)\
                         .nlargest(top_n, 'similarity')\
                         .apply(lambda x: f"{x['text']}", axis=1)\
@@ -147,8 +160,9 @@ with st.sidebar:
         chunk_overlap = st.slider("Chunk Overlap (characters)", 50, 200, 100)
         
         if st.button("Process Document"):
+            client = openai.OpenAI(api_key=api_key)
             progress_bar = st.progress(0)
-            st.session_state.embeddings_db = process_document(uploaded_file, progress_bar)
+            st.session_state.embeddings_db = process_document(uploaded_file, progress_bar, client)
             if st.session_state.embeddings_db is not None:
                 st.session_state.processing_complete = True
                 st.success("Document processed successfully!")
@@ -174,7 +188,7 @@ if prompt := st.chat_input("What's on your mind?"):
         st.error("Please enter your OpenAI API key in the sidebar.")
     else:
         try:
-            openai.api_key = api_key
+            client = openai.OpenAI(api_key=api_key)
             
             # Add user message
             st.session_state.messages.append({"role": "user", "content": prompt})
@@ -185,7 +199,7 @@ if prompt := st.chat_input("What's on your mind?"):
             context = ""
             if st.session_state.embeddings_db is not None:
                 with st.spinner("Retrieving relevant context..."):
-                    context = get_context(prompt, st.session_state.embeddings_db)
+                    context = get_context(prompt, st.session_state.embeddings_db, client)
             
             # Prepare messages
             system_message = (
@@ -202,7 +216,7 @@ if prompt := st.chat_input("What's on your mind?"):
             
             # Get response
             with st.spinner("Thinking..."):
-                response = openai.ChatCompletion.create(
+                response = client.chat.completions.create(
                     model="o3-mini-2025-01-31",
                     messages=messages,
                     temperature=0.7,
