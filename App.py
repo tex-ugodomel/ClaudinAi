@@ -21,7 +21,15 @@ if "processing_complete" not in st.session_state:
 if "uploaded_file_content" not in st.session_state:
     st.session_state.uploaded_file_content = None
 
-# Document processing functions
+def count_tokens(text: str) -> int:
+    """Count tokens in text using tiktoken."""
+    try:
+        encoding = tiktoken.get_encoding("cl100k_base")
+        return len(encoding.encode(text))
+    except Exception:
+        # Fallback: rough estimate if tiktoken fails
+        return len(text.split()) * 1.3
+
 def chunk_text(text: str, chunk_size: int = 1000, overlap: int = 100) -> List[str]:
     chunks = []
     start = 0
@@ -48,7 +56,7 @@ def chunk_text(text: str, chunk_size: int = 1000, overlap: int = 100) -> List[st
 
 def read_pdf(file) -> str:
     try:
-        file_bytes = file.getvalue()  # Get bytes directly
+        file_bytes = file.getvalue()
         pdf_reader = PyPDF2.PdfReader(io.BytesIO(file_bytes))
         text = ""
         for page in pdf_reader.pages:
@@ -80,7 +88,6 @@ def process_document(file_content: str, progress_bar, client) -> pd.DataFrame:
     if not file_content:
         return None
     
-    # Chunk the text
     chunks = chunk_text(file_content)
     total_chunks = len(chunks)
     
@@ -88,7 +95,6 @@ def process_document(file_content: str, progress_bar, client) -> pd.DataFrame:
         st.error("No text content found in document")
         return None
     
-    # Process embeddings with progress tracking
     embeddings = []
     texts = []
     
@@ -111,6 +117,23 @@ def process_document(file_content: str, progress_bar, client) -> pd.DataFrame:
         'embedding': embeddings
     })
 
+def get_context(query: str, df: pd.DataFrame, client, top_n: int = 3) -> str:
+    try:
+        query_embedding = get_embedding(query, client)
+        if not query_embedding:
+            return ""
+        
+        similarities = df.embedding.apply(lambda x: np.dot(x, query_embedding))
+        top_contexts = df.assign(similarity=similarities)\
+                        .nlargest(top_n, 'similarity')\
+                        .apply(lambda x: f"{x['text']}", axis=1)\
+                        .tolist()
+        
+        return " ".join(top_contexts)
+    except Exception as e:
+        st.error(f"Error retrieving context: {str(e)}")
+        return ""
+
 # Sidebar
 with st.sidebar:
     st.title("ClaudinAI Settings")
@@ -119,7 +142,6 @@ with st.sidebar:
     st.markdown("### Knowledge Base Settings")
     uploaded_file = st.file_uploader("Upload Knowledge Base (PDF, TXT)", type=["pdf", "txt"])
     
-    # Store file content when file is uploaded
     if uploaded_file is not None:
         if uploaded_file.type == "application/pdf":
             st.session_state.uploaded_file_content = read_pdf(uploaded_file)
@@ -149,7 +171,7 @@ with st.sidebar:
 
 # Main chat interface
 st.title("ClaudinAI")
-st.markdown("Your intelligent chatbot powered by OpenAI's o3-mini 🚀")
+st.markdown("Your intelligent chatbot powered by GPT-4o-mini 🚀")
 
 # Memory management
 max_messages = 10
@@ -196,7 +218,7 @@ if prompt := st.chat_input("What's on your mind?"):
             # Get response
             with st.spinner("Thinking..."):
                 response = client.chat.completions.create(
-                    model="gpt-4o-mini",
+                    model="gpt-4o-mini",  # Updated model name
                     messages=messages,
                     temperature=0.7,
                     max_tokens=2000,
@@ -211,7 +233,7 @@ if prompt := st.chat_input("What's on your mind?"):
         except Exception as e:
             st.error(f"An error occurred: {str(e)}")
             if "Rate limit" in str(e):
-                time.sleep(1)  # Rate limit handling
+                time.sleep(1)
 
 # Enhanced CSS styling
 st.markdown("""
