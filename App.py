@@ -217,7 +217,7 @@ if prompt := st.chat_input("What's on your mind?"):
             # Get response
             with st.spinner("Thinking..."):
                 response = client.chat.completions.create(
-                    model="o3-mini-2025-01-31",
+                    model="o3-mini",
                     messages=messages,
                     temperature=0.7,
                     max_tokens=2000,
