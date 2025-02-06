@@ -31,7 +31,9 @@ def extract_text_from_pdf(pdf_path):
 
 # Function to embed text using OpenAI API
 def get_embeddings(text):
-    response = openai.Embedding.create(model="text-embedding-3-small", input=text)
+    client = openai.OpenAI()
+    response = client.embeddings.create(model="text-embedding-3-small", input=text)
+    embedding = response.data[0].embedding
     return response["data"][0]["embedding"]
 
 # Upload PDF
