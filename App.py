@@ -45,9 +45,7 @@ if uploaded_file is not None:
             st.success("✅ PDF processed successfully!")
             
             # Chunk text for embeddings
-            chunks = pdf_text.split("
-
-")  # Simple chunking strategy
+            chunks = pdf_text.split("\n\n")  # Simple chunking strategy
             embeddings = [get_embeddings(chunk) for chunk in chunks]
             
             # Save to DataFrame
@@ -69,11 +67,7 @@ if query and "df" in st.session_state:
     top_result = df.sort_values("similarity", ascending=False).iloc[0]["content"]
     
     # Generate response
-    prompt = f"Using the following context, answer the question:
-
-Context: {top_result}
-
-Question: {query}"
+    prompt = f"Using the following context, answer the question:\n\nContext: {top_result}\n\nQuestion: {query}"
     response = openai.ChatCompletion.create(model=model_choice, messages=[{"role": "user", "content": prompt}])
     
     st.subheader("🧠 ClaudinAi's Answer:")
