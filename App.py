@@ -19,7 +19,7 @@ def get_openai_api_key():
     return st.session_state.get("OPENAI_API_KEY", None)
 
 # Load preprocessed document embeddings
-DATA_PATH = "data/parsed_pdf_docs_with_embeddings.csv"
+DATA_PATH = "parsed_pdf_docs_with_embeddings.csv"
 df = pd.read_csv(DATA_PATH)
 df["embeddings"] = df.embeddings.apply(json.loads).apply(np.array)  # Convert stored embeddings back to arrays
 
