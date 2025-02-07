@@ -7,3 +7,4 @@ tiktoken>=0.3.0
 pdfminer.six
 scikit-learn
 pdf2image
+poppler-utils
