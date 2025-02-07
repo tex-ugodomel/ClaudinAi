@@ -1,76 +1,111 @@
 import streamlit as st
-import os
-import json
-import numpy as np
-import pandas as pd
 import openai
-from pdfminer.high_level import extract_text
+import pandas as pd
+import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
-from ast import literal_eval
+import json
+import re
 
-# Set OpenAI API key (ensure you set this in your environment)
-openai.api_key = os.getenv("OPENAI_API_KEY")
-
-# Streamlit UI with ClaudinAi branding
-st.set_page_config(page_title="ClaudinAi - RAG Chatbot", page_icon="🤖")
-st.title("🤖 ClaudinAi - RAG Chatbot")
-
-# Sidebar settings
+# Sidebar for API Key input
 st.sidebar.header("Settings")
-model_choice = st.sidebar.selectbox("Choose model:", ["gpt-4o-mini", "o1-mini"])
-st.sidebar.markdown("---")
+api_key = st.sidebar.text_input("Enter your OpenAI API Key", type="password")
 
-# Function to extract text from PDF
-def extract_text_from_pdf(pdf_path):
-    try:
-        text = extract_text(pdf_path)
-        return text.strip()
-    except Exception as e:
-        st.error(f"Error extracting text: {e}")
+# Store API key in session state
+if api_key:
+    st.session_state["OPENAI_API_KEY"] = api_key
+
+# Ensure API key is set before making OpenAI API calls
+def get_openai_api_key():
+    return st.session_state.get("OPENAI_API_KEY", None)
+
+# Load preprocessed document embeddings
+DATA_PATH = "data/parsed_pdf_docs_with_embeddings.csv"
+df = pd.read_csv(DATA_PATH)
+df["embeddings"] = df.embeddings.apply(json.loads).apply(np.array)  # Convert stored embeddings back to arrays
+
+# Function to get embeddings using OpenAI API
+def get_embeddings(text):
+    api_key = get_openai_api_key()
+    if not api_key:
+        st.error("Please enter your OpenAI API key in the sidebar.")
         return None
 
-# Function to embed text using OpenAI API
-def get_embeddings(text):
-    client = openai.OpenAI()
-    response = client.embeddings.create(model="text-embedding-3-small", input=text)
-    embedding = response.data[0].embedding
-    return response["data"][0]["embedding"]
+    try:
+        client = openai.OpenAI(api_key=api_key)
+        embeddings = client.embeddings.create(
+            model="text-embedding-3-small",
+            input=text,
+            encoding_format="float"
+        )
+        return np.array(embeddings.data[0].embedding)
+    except Exception as e:
+        st.error(f"Error generating embeddings: {e}")
+        return None
 
-# Upload PDF
-st.subheader("📂 Upload a PDF Document")
-uploaded_file = st.file_uploader("Upload a PDF", type=["pdf"])
-
-if uploaded_file is not None:
-    with st.spinner("Processing PDF..."):
-        pdf_text = extract_text_from_pdf(uploaded_file)
-        if pdf_text:
-            st.success("✅ PDF processed successfully!")
-            
-            # Chunk text for embeddings
-            chunks = pdf_text.split("\n\n")  # Simple chunking strategy
-            embeddings = [get_embeddings(chunk) for chunk in chunks]
-            
-            # Save to DataFrame
-            df = pd.DataFrame({"content": chunks, "embeddings": embeddings})
-            df.to_csv("pdf_embeddings.csv", index=False)
-            
-            st.session_state["df"] = df  # Store in session state
-
-# Chatbot input
-st.subheader("💬 Ask ClaudinAi a Question")
-query = st.text_input("Type your question based on the PDF content")
-
-if query and "df" in st.session_state:
-    df = st.session_state["df"]
-    query_embedding = get_embeddings(query)
-    df["similarity"] = df["embeddings"].apply(lambda x: cosine_similarity([x], [query_embedding])[0][0])
+# Search function to find the most relevant content
+def search_content(input_text, top_k=3):
+    embedded_value = get_embeddings(input_text)
+    if embedded_value is None:
+        return None
     
-    # Retrieve most relevant content
-    top_result = df.sort_values("similarity", ascending=False).iloc[0]["content"]
-    
-    # Generate response
-    prompt = f"Using the following context, answer the question:\n\nContext: {top_result}\n\nQuestion: {query}"
-    response = openai.ChatCompletion.create(model=model_choice, messages=[{"role": "user", "content": prompt}])
-    
-    st.subheader("🧠 ClaudinAi's Answer:")
-    st.write(response["choices"][0]["message"]["content"])
+    df["similarity"] = df.embeddings.apply(lambda x: cosine_similarity(x.reshape(1, -1), embedded_value.reshape(1, -1))[0][0])
+    return df.sort_values("similarity", ascending=False).head(top_k)
+
+# Generate response using retrieved documents
+def generate_output(input_prompt, similar_content, threshold=0.5):
+    api_key = get_openai_api_key()
+    if not api_key:
+        st.error("Please enter your OpenAI API key in the sidebar.")
+        return None
+
+    content = similar_content.iloc[0]["content"] if not similar_content.empty else ""
+
+    for i, row in similar_content.iterrows():
+        if row["similarity"] > threshold:
+            content += f"\n\n{row['content']}"
+
+    prompt = f"INPUT PROMPT:\n{input_prompt}\n-------\nCONTENT:\n{content}"
+
+    system_prompt = '''
+        You will be provided with an input prompt and content as context that can be used to reply to the prompt.
+        
+        1. First, assess whether the provided content is relevant to the input prompt.  
+        2a. If relevant, use the content to generate a response.  
+        2b. If irrelevant, reply using general knowledge or state that the answer is unknown.  
+        
+        Stay concise, using only the necessary content for the response.
+    '''
+
+    try:
+        client = openai.OpenAI(api_key=api_key)
+        completion = client.chat.completions.create(
+            model="gpt-4o",
+            temperature=0.5,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt}
+            ]
+        )
+        return completion.choices[0].message.content
+    except Exception as e:
+        st.error(f"Error generating response: {e}")
+        return None
+
+# Streamlit UI
+st.title("RAG Chatbot")
+
+user_input = st.text_input("Ask a question:")
+
+if user_input:
+    matching_content = search_content(user_input, top_k=3)
+
+    if matching_content is not None:
+        st.write("### Retrieved Context")
+        for i, row in matching_content.iterrows():
+            st.write(f"**Match {i+1} (Similarity: {row['similarity']:.2f})**")
+            st.write(row["content"][:300] + "...")  # Show preview of retrieved content
+
+        st.write("### Response")
+        response = generate_output(user_input, matching_content)
+        if response:
+            st.write(response)
