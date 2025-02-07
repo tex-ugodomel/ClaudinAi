@@ -11,7 +11,7 @@ import base64
 import io
 
 # ---------------------- APP CONFIGURATION ---------------------- #
-st.set_page_config(page_title="Advanced RAG Chatbot", layout="wide")
+st.set_page_config(page_title="ClaudinAi Chatbot", layout="wide")
 
 # File paths
 DATA_PATH = "data/parsed_pdf_docs_with_embeddings.csv"
