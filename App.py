@@ -263,7 +263,7 @@ if uploaded_files:
     process_uploaded_files(uploaded_files, rag_method)
 
 # ---------------------- CHATBOT UI ---------------------- #
-st.title("📚 Advanced Document Chat")
+st.title("📚 ClaudinAi Chatbot")
 
 # Chat display
 if "messages" not in st.session_state:
